@@ -26,6 +26,14 @@ QUERY = """query($owner: String!, $name: String!) {
   }
 }"""
 
+COMMENTS_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $number) {
+      comments(first: 6) { nodes { author { login } } }
+    }
+  }
+}"""
+
 
 def gh_api(payload: dict) -> dict:
     p = subprocess.run(["gh", "api", "graphql", "--input", "-"],
@@ -59,6 +67,19 @@ def main() -> None:
                 continue
             if n["url"] in seen:
                 continue
+            # Writer "nvm"-style self-resolution: skip when every comment is by the author.
+            try:
+                c = gh_api({"query": COMMENTS_QUERY,
+                            "variables": {"owner": owner, "name": name,
+                                          "number": n["number"]}})
+                cauth = [x["author"]["login"]
+                         for x in c["data"]["repository"]["discussion"]
+                             ["comments"]["nodes"]]
+            except Exception:
+                cauth = []
+            if cauth and all(a == n["author"]["login"] for a in cauth):
+                print(f"SKIP self-resolved: {n['url']}")
+                continue
             fresh.append((owner, name, n))
     if not fresh:
         print("No fresh candidates.")
@@ -72,18 +93,20 @@ def main() -> None:
     print(body)
     state["seen"] = sorted(seen)[-200:]
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    if dry:
+        print("(dry-run: state guncellenmedi)")
+        return
     json.dump(state, open(STATE, "w", encoding="utf-8"), indent=2)
-    if not dry:
-        subprocess.run(["gh", "issue", "create", "--title",
-                        "🎯 Cevaplanabilir tartışmalar (haftalık radar)",
-                        "--body", body], check=True, cwd=BASE)
-        subprocess.run(["git", "add", "data/watch_state.json"], check=True, cwd=BASE)
-        subprocess.run(["git", "-c", "user.name=radar-bot",
-                        "-c", "user.email=radar@local",
-                        "commit", "-m", "chore: radar state [skip ci]"],
-                       check=True, cwd=BASE)
-        subprocess.run(["git", "push"], check=True, cwd=BASE)
-        print("Issue opened + state pushed.")
+    subprocess.run(["gh", "issue", "create", "--title",
+                    "🎯 Cevaplanabilir tartışmalar (haftalık radar)",
+                    "--body", body], check=True, cwd=BASE)
+    subprocess.run(["git", "add", "data/watch_state.json"], check=True, cwd=BASE)
+    subprocess.run(["git", "-c", "user.name=radar-bot",
+                    "-c", "user.email=radar@local",
+                    "commit", "-m", "chore: radar state [skip ci]"],
+                   check=True, cwd=BASE)
+    subprocess.run(["git", "push"], check=True, cwd=BASE)
+    print("Issue opened + state pushed.")
 
 
 if __name__ == "__main__":
